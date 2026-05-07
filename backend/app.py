@@ -1,19 +1,20 @@
-from flask import Flask, jsonify, request, session
+import os
+from flask import Flask, jsonify, request, session, send_from_directory
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
-import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-app = Flask(__name__)
+# --- KONFIGURACJA MONOLITU ---
+# Szukamy folderu 'dist', który wygeneruje React po wpisaniu 'npm run build'
+frontend_dist = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'frontend', 'dist')
 
-# Konfiguracja sesji i CORS
-# Secret Key to klucz, którym Flask szyfruje ciasteczka. Nigdy go nie udostępniaj!
-app.secret_key = os.getenv('SECRET_KEY') 
+# Informujemy Flaska, gdzie leżą statyczne pliki (HTML, CSS, JS z Reacta)
+app = Flask(__name__, static_folder=frontend_dist, static_url_path='/')
 
-# Musimy wskazać dokładny adres Reacta i pozwolić na ciasteczka (supports_credentials)
-CORS(app, supports_credentials=True, origins=["http://localhost:5173", "http://localhost:5176"])
+app.secret_key = os.getenv('SECRET_KEY', 'tajny-klucz-twojej-aplikacji') 
+CORS(app, supports_credentials=True) # CORS wciąż potrzebny do pracy lokalnej
 
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -40,47 +41,34 @@ class Task(db.Model):
 with app.app_context():
     db.create_all()
 
-# --- SYSTEM LOGOWANIA Z SESJĄ ---
-
+# --- SYSTEM LOGOWANIA ---
 @app.route('/api/auth/login', methods=['POST'])
 def login():
     data = request.json
-    
-    # 1. Sprawdzamy Admina
     if data['username'] == os.getenv('ADMIN_USERNAME') and data['password'] == os.getenv('ADMIN_PASSWORD'):
-        session['user_id'] = 0 # Zapisujemy w sesji (na serwerze)!
+        session['user_id'] = 0
         session['role'] = 'admin'
         return jsonify({"id": 0, "username": os.getenv('ADMIN_USERNAME'), "role": "admin", "xp": 9999})
     
-    # 2. Sprawdzamy zwykłego usera
     user = User.query.filter_by(username=data['username'], password=data['password']).first()
     if user:
-        session['user_id'] = user.id # Zapisujemy w sesji!
+        session['user_id'] = user.id
         session['role'] = 'user'
         return jsonify({"id": user.id, "username": user.username, "xp": user.xp, "role": "user"})
-        
     return jsonify({"error": "Błędne dane logowania"}), 401
 
 @app.route('/api/auth/me', methods=['GET'])
 def get_me():
-    """Ten endpoint sprawdza, czy użytkownik ma aktualną sesję (np. po odświeżeniu strony)"""
     user_id = session.get('user_id')
-    
-    if user_id is None:
-        return jsonify({"error": "Brak aktywnej sesji"}), 401
-        
-    if user_id == 0:
-        return jsonify({"id": 0, "username": os.getenv('ADMIN_USERNAME'), "role": "admin", "xp": 9999})
-        
+    if user_id is None: return jsonify({"error": "Brak aktywnej sesji"}), 401
+    if user_id == 0: return jsonify({"id": 0, "username": os.getenv('ADMIN_USERNAME'), "role": "admin", "xp": 9999})
     user = User.query.get(user_id)
-    if user:
-        return jsonify({"id": user.id, "username": user.username, "xp": user.xp, "role": "user"})
-        
+    if user: return jsonify({"id": user.id, "username": user.username, "xp": user.xp, "role": "user"})
     return jsonify({"error": "Nie znaleziono użytkownika"}), 404
 
 @app.route('/api/auth/logout', methods=['POST'])
 def logout():
-    session.clear() # Czyścimy sesję na serwerze
+    session.clear()
     return jsonify({"message": "Wylogowano"})
 
 # --- PANEL ADMINA ---
@@ -89,16 +77,13 @@ def handle_users():
     if request.method == 'GET':
         users = User.query.all()
         return jsonify([{"id": u.id, "username": u.username, "xp": u.xp} for u in users])
-        
     if request.method == 'POST':
         data = request.json
-        if User.query.filter_by(username=data['username']).first():
-            return jsonify({"error": "Taka nazwa użytkownika już istnieje!"}), 400
-            
+        if User.query.filter_by(username=data['username']).first(): return jsonify({"error": "Taka nazwa istnieje!"}), 400
         new_user = User(username=data['username'], password=data['password'])
         db.session.add(new_user)
         db.session.commit()
-        return jsonify({"message": "Konto utworzone!", "user": {"id": new_user.id, "username": new_user.username, "xp": 0}})
+        return jsonify({"message": "Utworzono", "user": {"id": new_user.id, "username": new_user.username, "xp": 0}})
 
 @app.route('/api/admin/users/<int:user_id>', methods=['DELETE'])
 def delete_user(user_id):
@@ -106,12 +91,11 @@ def delete_user(user_id):
     for folder in folders:
         Task.query.filter_by(folder_id=folder.id).delete()
         db.session.delete(folder)
-        
     user = User.query.get(user_id)
     if user:
         db.session.delete(user)
         db.session.commit()
-        return jsonify({"message": "Użytkownik usunięty"})
+        return jsonify({"message": "Usunięto"})
     return jsonify({"error": "Nie znaleziono"}), 404
 
 # --- PROJEKTY I ZADANIA ---
@@ -162,6 +146,20 @@ def update_task(task_id):
         task.completed = data['completed']
     db.session.commit()
     return jsonify({"id": task.id, "title": task.title, "completed": task.completed})
+
+# --- GŁÓWNY ROUTE REACTA ---
+@app.route('/')
+def serve_react():
+    # Zwraca główny plik index.html z folderu dist
+    return send_from_directory(app.static_folder, 'index.html')
+
+@app.route('/<path:path>')
+def serve_any_path(path):
+    # Pozwala Flaskowi wydawać pliki takie jak logo.svg, CSS, JS
+    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
+        return send_from_directory(app.static_folder, path)
+    # Jeśli użytkownik wpisze dziwny adres, zawsze wracaj do Reacta
+    return send_from_directory(app.static_folder, 'index.html')
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

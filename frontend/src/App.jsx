@@ -4,9 +4,7 @@ import { LayoutDashboard, Folder, Plus, CheckCircle2, Circle, Zap, User as UserI
 // Import naszego nowego, autorskiego logo!
 import logoUrl from '/logo.svg';
 
-// Mała funkcja pomocnicza, żeby nie pisać wszędzie adresu
-const API_URL = 'http://localhost:5000/api';
-
+const API_URL = import.meta.env.DEV ? 'http://localhost:5000/api' : '/api';
 function App() {
   const [user, setUser] = useState(null);
   const [authForm, setAuthForm] = useState({ username: '', password: '' });
